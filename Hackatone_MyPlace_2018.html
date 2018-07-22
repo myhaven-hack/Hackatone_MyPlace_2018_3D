@@ -268,6 +268,29 @@
             webScene.add(sensorloaction);
 
         });
+        
+        
+        var deviceIds = ['f8f6a30c006f0d00', 'FFFFFFFF0069c64a', 'FFFFFFFF0069fdd0']
+        var baseUrl = 'http://localhost:5000/getdevicemeasurements?deviceId='
+
+        var request = new XMLHttpRequest();
+        request.onreadystatechange = function() {
+            console.log(request.responseText);
+        };
+
+        // TODO: Update with device layer info
+        // Iterate over devices:
+        //  1) Get device state
+        //  2) Update device icon based on state
+        for(i = 0; i < deviceIds.length; i++) {
+            // Get device state
+            request.open('GET', baseUrl + deviceIds[i], false);
+            request.send(null);
+
+            // TODO: Update device layer info based on device state
+
+        }
+
     </script>
 </head>
 
