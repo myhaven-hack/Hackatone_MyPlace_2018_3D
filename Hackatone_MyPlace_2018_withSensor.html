@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+    <title>SceneLayer filter and query - 4.8</title>
+    <style>
+        html,
+        body,
+        #viewDiv {
+            padding: 0;
+            margin: 0;
+            height: 100%;
+            width: 100%;
+        }
+        
+        #optionsDiv {
+            width: 250px;
+            padding: 0 12px 0 12px;
+            background-color: white;
+            padding: 10px;
+        }
+    </style>
+
+    <link rel="stylesheet" href="https://js.arcgis.com/4.8/esri/css/main.css">
+    <script src="https://js.arcgis.com/4.8/"></script>
+
+    <script>
+        require([
+            "esri/WebScene",
+            "esri/views/SceneView", "esri/layers/SceneLayer",
+            "esri/widgets/Legend",
+            "esri/widgets/LayerList", "esri/layers/FeatureLayer", "esri/layers/support/LabelClass",
+            //"esri/Graphic","esri/layers/GraphicsLayer", "esri/symbols/PointSymbol3D", "esri/symbols/IconSymbol3DLayer",
+
+            "esri/request",
+
+            "dojo/on",
+            "dojo/dom",
+            "dojo/domReady!"
+        ], function(
+            WebScene, SceneView, SceneLayer, Legend, LayerList, FeatureLayer, LabelClass,
+            //Graphic, GraphicsLayer, PointSymbol3D, IconSymbol3DLayer,
+            esriRequest,
+
+            on, dom
+        ) {
+
+            // load web scene from ArcGIS Online
+            var webScene = new WebScene({
+                portalItem: { // autocasts as new PortalItem()
+                    id: "b1f8fb3b2fd14cc2a78728de108776b0"
+                }
+            });
+
+            // create the scene view
+            var view = new SceneView({
+                container: "viewDiv",
+                map: webScene,
+                environment: {
+                    lighting: {
+                        directShadowsEnabled: false
+                    }
+                }
+            });
+
+            //Creating 3d Building Model
+            webScene.when(function() {
+
+                // the field containing the building is different for each layer
+                // buildingQuery defines the query corresponding to each layer in the web scene
+                var buildingQuery = {
+                    "Building Wireframe": "BUILDINGID = 'Q'",
+                    "Interior Space": "BUILDING = 'Q'",
+                    "Walls": "BUILDINGKEY = 'Q'",
+                    "Doors": "BUILDINGKEY = 'Q'"
+                };
+
+                // filter all layers in the web scene to contain only building Q
+                webScene.layers.forEach(function(layer) {
+                    layer.definitionExpression = buildingQuery[layer.title];
+                });
+
+                // we will use the Interior Space layer many times, so we'll save it in a variable
+                var officeLayer = webScene.layers.find(function(l) {
+                    return l.title === "Interior Space";
+                });
+
+                // the data set displays many types of offices, but below are the ones we want to display
+                var officeTypes = [
+                    "Office-Executive", "Conference Room",
+                    "Office-Single", "Office-Manager", "Office Cubicle"
+                ];
+
+                // function that calculates how many office types are currently shown and displays this in the legend
+                function displayOfficeTypes() {
+
+                    // create the query on the officeLayer so that it respects its definitionExpression
+                    var query = officeLayer.createQuery();
+                    query.outFields = ["SPACETYPE"];
+
+                    // query the officeLayer to calculate how many offices are from each type
+                    officeLayer.queryFeatures(query)
+                        .then(function(results) {
+
+                            var typesCounter = {}; // counter for the office types defined in the officeTypes array
+                            var othersCounter = 0; // counter for all the other office types
+
+                            // count the types of all the features returned from the query
+                            results.features.forEach(function(feature) {
+                                var spaceType = feature.attributes.SPACETYPE;
+                                if (typesCounter[spaceType]) {
+                                    typesCounter[spaceType]++;
+                                } else {
+                                    typesCounter[spaceType] = 1;
+                                }
+
+                                if (officeTypes.indexOf(spaceType) === -1) {
+                                    othersCounter++;
+                                }
+                            });
+
+                            // to set the results in the legend, we need to modify the labels in the renderer
+                            var newRenderer = officeLayer.renderer.clone();
+
+                            officeTypes.forEach(function(value, i) {
+                                newRenderer.uniqueValueInfos[i].label = value +
+                                    ": " + (typesCounter[value] || 0) + " rooms";
+                            });
+
+                            newRenderer.defaultLabel = "Other types: " +
+                                othersCounter + " rooms";
+
+                            officeLayer.renderer = newRenderer;
+                        });
+                }
+
+                // call the method to display the counts from each office type in the legend
+                displayOfficeTypes();
+
+                // function that will filter by the selected floor
+                function showFloors(event) {
+
+                    // retrieve the query stored in the selected value
+                    var floorQuery = event.target.value;
+
+                    // update the definition expression of all layers except the wireframe layer
+                    webScene.layers.forEach(function(layer) {
+                        if (layer.title !== "Building Wireframe") {
+                            layer.definitionExpression = buildingQuery[layer.title] +
+                                " AND " + floorQuery;
+                        }
+                    });
+
+                    // after the layers were filtered recalculate the counts of each office type
+                    displayOfficeTypes();
+                }
+
+                on(dom.byId("floorSelect"), "change", showFloors);
+
+                // add a legend for the officeLayer
+                var legend = new Legend({
+                    view: view,
+                    layerInfos: [{
+                        layer: officeLayer,
+                        title: " "
+                    }]
+                });
+
+                view.ui.add(legend, "bottom-right");
+
+                // Add a layer list to enable and disable the building wireframe
+                var layerList = new LayerList({
+                    view: view
+                });
+
+                view.ui.add(layerList, {
+                    position: "top-right"
+                });
+            });
+
+            //Adding FloorPlan Option div
+            view.ui.add(dom.byId("optionsDiv"), {
+                position: "top-left",
+                index: 0
+            });
+
+            // setup the renderer with color visual variable
+            renderer = {
+                type: "simple",
+                symbol: {
+                    type: "point-3d", // autocasts as new PointSymbol3D()
+                    symbolLayers: [{
+                        type: "object", // autocasts as new ObjectSymbol3DLayer()
+                        width: 2, // diameter of the object from east to west in meters
+                        height: 2, // height of the object in meters
+                        depth: 2, // diameter of the object from north to south in meters
+                        resource: {
+                            primitive: "sphere"
+                        },
+                        material: {
+                            color: "red"
+                        }
+                    }]
+                },
+                visualVariables: [{
+                    //     type: "color",
+                    //     field: "OBJECTID",
+                    //     stops: [{
+                    //         value: 1,
+                    //         color: "yellow"
+                    //     }, {
+                    //         value: 2,
+                    //         color: "red"
+                    //     }, {
+                    //         value: 3,
+                    //         color: "blue"
+                    //     }]
+                    // }, 
+                    // {
+                    //     //type: "size",
+                    //     axis: "width-and-depth",
+                    //     useSymbolValue: true // uses the width value defined in the symbol layer (50,000)
+                }]
+            };
+
+            //Returns a renderer with a color visual variable driven by the input
+
+            // setup the lable class for sensor location layer
+            var labelClass = new LabelClass({
+                symbol: {
+                    type: "label-3d", // autocasts as new LabelSymbol3D()
+                    symbolLayers: [{
+                        type: "text", // autocasts as new TextSymbol3DLayer()
+                        material: {
+                            color: "black"
+                        },
+                        size: 20
+                    }]
+                },
+                labelPlacement: "above",
+                labelExpressionInfo: {
+                    expression: "$feature.Type"
+                }
+            });
+
+            // Define elevationInfo and set it on the layer
+            var currentElevationInfo = {
+                mode: "relative-to-ground",
+                //offset: 10 ,
+                featureExpressionInfo: {
+                    expression: "$feature.floor"
+                },
+                unit: "meters"
+            };
+
+            // set the sensor location layer
+            sensorloaction = new FeatureLayer({
+                url: "https://services6.arcgis.com/XFwF8bj8CEvcqjYJ/ArcGIS/rest/services/griffith_park_access/FeatureServer/0",
+                renderer: renderer,
+                labelingInfo: [labelClass],
+                title: "Sensor Loaction",
+                // This prevents the markers from "billboarding" when the view is tilted
+                elevationInfo: {
+                    mode: "on-the-ground"
+                }
+            });
+
+            //set elevation for sensor location layer
+            sensorloaction.elevationInfo = currentElevationInfo;
+
+            //adding layer to the webSene
+            webScene.add(sensorloaction);
+            console.log('renderer:', renderer)
+            console.log('sensorloaction:', sensorloaction)
+        });
+
+        function get_sensors_val() {
+            //geting sensor last value
+            var request_motion = new XMLHttpRequest();
+
+            request_motion.open('GET', 'https://iot.peoplepowerco.com/cloud/json/devices/FFFFFFFF0069c64a/parameters', true); //motion
+            //request_motion.open('GET', 'https://iot.peoplepowerco.com/cloud/json/devices/FFFFFFFF0069fdd0/parameters', true);//entry
+            request_motion.setRequestHeader('API_KEY', 'MQ-5r7R3-ewEsM8x7Tc1ZXYFIjSkiaZiOAUVTlHANegLw-EaSAk3XTAlmtc-AAkJ');
+
+            request_motion.onreadystatechange = function() {
+                if (this.readyState === 4 && this.status == 200) {
+                    console.log('Status:', this.status);
+                    console.log('Headers:', this.getAllResponseHeaders());
+                    console.log('Body:', this.responseText);
+                    //var motion_jason=this.responseTex
+                    var motion_jason = JSON.parse(this.responseText);
+                    myFunction(motion_jason);
+                }
+            };
+            request_motion.send();
+        }
+
+        function myFunction(motion_jason) {
+            var motion_jason_out = motion_jason;
+            console.log('motion_jason_out', motion_jason_out);
+
+            //getting array from sensor 
+            var arr = motion_jason_out.devices.map(function(obj) {
+                var key = Object.keys(obj).sort()[1],
+                    rtn = {};
+                motion_jason_out_devices = obj;
+                console.log("motion_jason_out_devices", motion_jason_out_devices);
+                return rtn[key] = obj[key], rtn;
+            });
+            console.log("arr", arr);
+
+            //getting motion sensor all parametters
+            var motion_jason_out = JSON.stringify(motion_jason_out_devices);
+            console.log("motion_jason_out", motion_jason_out);
+
+            //getting motion sensor current status
+            console.log("motion_jason_out", motion_jason_out_devices.parameters[6]);
+            motionStatus_val = motion_jason_out_devices.parameters[6].value
+            motionStatus_name = motion_jason_out_devices.parameters[6].name
+            console.log("motionStatus_val", motionStatus_val);
+            console.log("motionStatus_name", motionStatus_name);
+
+                        //imitating motion status
+            motionStatus_val = 'true';
+            alert(motionStatus_name +" "+ motionStatus_val);
+
+            //Set rendere base of mottion status
+            if (motionStatus_val === 'true') {
+                motionStatus = 6;
+                // 3D thematic extrusion
+                var sizeVisVar = {
+                    // The type must be set to size for the renderer to know size will be altered
+                    type: "size",
+                    // Assign the field name to visualize with size (total population)
+                    field: "OBJECTID",
+                    // Set the field to normalize the values by (in this case square miles)
+                    //normalizationField: "SQMI",
+                    //valueUnit: "unknown",
+                    // Create a size ramp based on the min/max values
+                    stops: [{
+                        value: 1,
+                        size: 2
+                    }, {
+                        value: 2,
+                        size: motionStatus
+                    }, {
+                        value: 3,
+                        size: 2
+                    }]
+                };
+            } else {
+                motionStatus = 2;
+            }
+
+            //alert(motionStatus);
+
+            //visualVariables: [colorVisVar, sizeVisVar]
+            renderer.visualVariables.pop([0]);
+            renderer.visualVariables.push(sizeVisVar);
+            console.log('renderer:', renderer)
+            console.log('sensorloaction:', sensorloaction)
+            sensorloaction.renderer = renderer;
+
+        }
+    </script>
+</head>
+
+<body>
+    <div id="viewDiv"></div>
+    <div id="optionsDiv">
+        <div>
+            <b>Filter building by floor:</b>
+            <select id="floorSelect">
+                <option value="1=1">All</option>
+                <option value="FLOOR = '1'">1</option>
+                <option value="FLOOR = '2'">2</option>
+                <option value="FLOOR = '3'">3</option>
+            </select>
+            <input id="btnPrrojId" type="button" value="Check Sensor Status" onclick="get_sensors_val()">
+        </div>
+    </div>
+</body>
+
+</html>
