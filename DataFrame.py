@@ -5,13 +5,13 @@ class DF:
 
 	def __init__(self, cleaned_data):
 		self.df = pd.DataFrame(cleaned_data, columns=list(cleaned_data.keys()))
-		self.df = self.df.set_index('time received')
+		self.df = self.df.set_index('Time Stamp')
 
 	def __getitem__(self, column):
 		return self.df[column]
 
 	def restart(self):
-		self.df = pd.DataFrame(columns=['time received', 'energy'])
+		self.df = pd.DataFrame(columns=list(self.df.columns))
 
 	def tail(self, n):
 		return self.df.tail(n)
