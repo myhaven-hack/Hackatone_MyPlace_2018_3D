@@ -64,9 +64,17 @@ def calculate_bill(total_kwh):
 	else:
 		fuel_cost = (0.038570 * total_kwh)
 		non_fuel_cost = (0.046990 * total_kwh)
-	money = fuel_cost + non_fuel_cost + 5.9
+	money = fuel_cost + non_fuel_cost
 	bill = locale.currency(money, grouping=True)
 	return [money,bill]
+
+
+def calculate_kwh_from_bill(bill):
+	if bill > 85.56:
+		other = (0.038570 * 1000) + (0.046990 * 1000) - (0.048570 * 1000) - (0.056990 *  1000)
+		return (bill - other)/(0.048570 + 0.056990)
+	else:
+		return bill/(0.038570 + 0.046990) 
 
 
 def generate_message(today, current_kwh_total, monthly_quota):
@@ -100,29 +108,48 @@ def api_time(date_time):
 	return str(datetime.datetime.strftime(date_time, "%Y-%m-%dT%H:%M:%S."))+"000-04:00"
 
 
-def clean_data(data):
-	clean_data = {"time received": [], "energy": [], "current_kwh_total": [], "current_bill": []}
+def clean_data(data, monthly_quota, monthly_quota_kwh):
+	clean_data = {"Time Stamp": [], "Energy": [], "Current KWH Total": [],
+					"Current Bill": [], "Current Quota Bill Difference": [],
+					"Current Quota KWH Difference": []}
+	power_sum = 0.0
+	power_counts = 0
 	curr_total = 0
 	for i in data['readings']:
 		par =  i['params']
 		for d in par:
+			if d['name']=='power' and d['value']>0:
+				power_sum += eval(d['value'])
+				power_counts += 1
 			if d['name']=='energy':
-				clean_data["time received"].append(convert_time(i['timeStamp']))
+				clean_data["Time Stamp"].append(convert_time(i['timeStamp']))
 				val = eval(d['value'])/1000.0
 				curr_total += val
-				clean_data["energy"].append(val)
-				clean_data["current_kwh_total"].append(curr_total)
+				clean_data["Energy"].append(val)
+				clean_data["Current KWH Total"].append(curr_total)
 				[money, bill] = calculate_bill(curr_total)
-				clean_data["current_bill"].append(money)
-	return clean_data
+				clean_data["Current Bill"].append(money)
+				clean_data["Current Quota Bill Difference"].append(monthly_quota - money)
+				clean_data["Current Quota KWH Difference"].append(monthly_quota_kwh - curr_total)
+	return [power_sum/power_counts, clean_data]
 
 
-def create_graph(col, quota, dataFrame):
-	title = "Time Series Graph - "+col+" Consumption"
+def create_graph(col, col2, quota, dataFrame):
+	maxi = dataFrame[col].max()
+	mini = dataFrame[col].min()
+	#if dataFrame[col].max() > quota:
+	#	pp.yticks(np.arange(mini, maxi+1))
+	#else:
+	#	pp.yticks(np.arange(mini, quota+1))
+	title = "Time Series Graph for Smart Plug - "+col
 	pp.title(title, size='x-large')
 	pp.xlabel("DateTime", size='x-large')
-	pp.ylabel("Bill Amount ($)", size='x-large')
+	if col=='Current Bill':
+		pp.ylabel("Bill Amount ($)", size='x-large')
+	else:
+		pp.ylabel("KWH Amount", size='x-large')
 	dataFrame[col].plot(figsize=(20, 10), subplots=False, marker="o", markersize=3, color='blue', alpha=0.5)
+	dataFrame[col2].plot(figsize=(20, 10), subplots=False, marker="o", markersize=3, color='purple', alpha=0.5)
 	# add horizontal lines to show thresholds
 	pp.axhline(y=quota, color='red', linestyle='-', label="Threshold")
 	pp.axhline(y=quota * 0.75, color='orange', linestyle='-', label="Close to Threshold")
@@ -133,24 +160,26 @@ def create_graph(col, quota, dataFrame):
 	pp.legend()
 	path = "Graphs/"+col + ".png"
 	pp.savefig(path, orientation='landscape')
+	pp.close()
 
 
 def create_json_update(lastest_data, monthly_quota):
 	# if status code is 0, then we're good
 	# otherwise, then device is not turned off
 	# keep this simple binary decision.
-	total_kwh = float(lastest_data['current_kwh_total'])
+	total_kwh = float(lastest_data['Current KWH Total'])
 	[money, bill] = calculate_bill(total_kwh)
+	quota_money = locale.currency(monthly_quota, grouping=True)
 	dic = {
 			"Queried Time": str(lastest_data.index.values[0]),
-			"Current Energy": float(lastest_data['energy']),
-			"Current KWH Total": total_kwh,
-			"Current Bill": bill
+			"Current Energy": round(float(lastest_data['Energy']),5),
+			"Current KWH Total": round(total_kwh,5),
+			"Current Bill": bill,
+			"Monthly Quota": quota_money,
+			"Remaining Hours": round(float(lastest_data['Remaining Hours']),2),
+			"Current Savings": locale.currency(monthly_quota-money, grouping=True),
+			"Current Exceed": locale.currency(money-monthly_quota, grouping=True)
 			}
-	if (monthly_quota > money):
-		dic["Current Savings"] = locale.currency(monthly_quota-money, grouping=True)
-	else:
-		dic["Current Exceed"] = locale.currency(money-monthly_quota, grouping=True)
 	return json.dumps(dic)
 
 
@@ -162,7 +191,8 @@ def exceeded_monthly(current_kwh_total, monthly_quota):
 '''--------------------------------------------------------------------'''
 
 
-if __name__ == "__main__":
+def main():
+#if __name__ == "__main__":
 
 	deviceId = af.device_ids["Smart Plug"]
 	today = datetime.datetime.now()
@@ -170,9 +200,8 @@ if __name__ == "__main__":
 
 	logged_in = login()
 
-	print ("Passed Login")
-
-	monthly_quota = 10.0
+	monthly_quota = 2.0
+	monthly_quota_kwh = calculate_kwh_from_bill(monthly_quota)
 
 	if logged_in[0]:
 
@@ -182,60 +211,54 @@ if __name__ == "__main__":
 		# Create folder for graphs
 		pathlib2.Path("Graphs").mkdir(parents=True, exist_ok=True)
 
-		print ("Passed Created Folder")
-
 		# Collect data to populate df
 		collecting_data = query_api(deviceId, api_time(str(month_before)), api_time(str(today)))
-
-		print ("Passed Collected Data")
 
 		if collecting_data[0]:
 			# If we're able to collect data, do the following...
 
 			# Clean Data
-			cleaned_data = clean_data(collecting_data[1])
-
-			print ("Passed Cleaned Data")
+			[avg_power, cleaned_data] = clean_data(collecting_data[1], monthly_quota, monthly_quota_kwh)
+			avg_power = avg_power/1000.0
+			quota_hours = monthly_quota_kwh/avg_power
+			cleaned_data["Remaining Hours"] = [(quota_hours - (kwh/avg_power)) for kwh in cleaned_data["Current KWH Total"]]
 
 			# Create DataFrame
 			dataFrame = DF(cleaned_data)
 
-			print ("Passed Created DataFrame")
-
 			# Get Recent/Lastest Update and AVG energy
 			lastest_data = dataFrame.tail(1)
-			current_kwh_total = float(lastest_data['current_kwh_total'])
-			avg_energy = float(dataFrame['energy'].mean())
+			current_kwh_total = float(lastest_data['Current KWH Total'])
+			avg_energy = float(dataFrame['Energy'].mean())
 
-			print ("Passed Collected Info")
+			# Create Graphs
+			create_graph('Current Bill', "Current Quota Bill Difference", monthly_quota, dataFrame)
+			create_graph('Current KWH Total', "Current Quota KWH Difference", monthly_quota_kwh, dataFrame)
 
 			# Check if Quota is met
 			if exceeded_monthly(current_kwh_total, monthly_quota):
 
-				print (generate_message(str(today), current_kwh_total, monthly_quota))
+				# Return json update and message to user
+				return [create_json_update(lastest_data, monthly_quota),
+					generate_message(str(today), current_kwh_total, monthly_quota)]
 
-			# Create JSON object to send to WebAPP
-			create_json_update(lastest_data, monthly_quota)
+			else:
 
-			print ("Passed JSON")
-
-			dataFrame.to_string()
-
-			print ("Passed DataFrame Print")
-
-			create_graph('current_bill', monthly_quota, dataFrame)
-
-			print ("Passed Create Graph")
+				# Return json update and empty string
+				return [create_json_update(lastest_data, monthly_quota),""]
 
 		else:
 			# If we're unable to collect data, do the following...
 
-			# Print Error Message
-			print (collecting_data[1])
-
 			# Restart df
 			dataFrame = dataFrame.restart()
+
+			# Return Error Message
+			return (collecting_data[1])
 	else:
 
 		# Unsuccessful login
-		print (logged_in[1])
+		return (logged_in[1])
+
+if __name__ == "__main__":
+	print (main())
